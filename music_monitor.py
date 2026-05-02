@@ -1,13 +1,10 @@
-"""Monitor Apple Music playback state and current song info."""
+"""Monitor Apple Music playback state using osascript (no PyObjC/ScriptingBridge)."""
 
-import objc
+import os
 import subprocess
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
-
-from Foundation import NSObject, NSDistributedNotificationCenter, NSTimer
-from ScriptingBridge import SBApplication
 
 
 @dataclass
@@ -17,190 +14,189 @@ class SongInfo:
     album: str = ""
     duration: float = 0.0
     id: str = ""
+    art_path: str = ""
+
+
+_SCRIPT = '''
+tell application "Music"
+    if it is running then
+        set playerState to player state as string
+        set pos to player position
+        if player state is playing or player state is paused then
+            set t to name of current track
+            set a to artist of current track
+            set al to album of current track
+            set d to duration of current track
+            return playerState & "\\n" & (pos as string) & "\\n" & t & "\\n" & a & "\\n" & al & "\\n" & (d as string)
+        else
+            return playerState & "\\n0\\n\\n\\n\\n0"
+        end if
+    else
+        return "stopped\\n0\\n\\n\\n\\n0"
+    end if
+end tell
+'''
 
 
 class MusicMonitor:
-    """Detects Apple Music playback and retrieves song info."""
+    """Detects Apple Music playback using osascript subprocess calls.
+
+    Polls in a background thread to avoid blocking the main run loop.
+    """
 
     def __init__(self):
         self.current_song: Optional[SongInfo] = None
         self.is_playing: bool = False
         self.playback_time: float = 0.0
         self._on_song_changed: Optional[Callable] = None
-        self._music_app = None
-        self._timer = None
+        self._on_art_ready: Optional[Callable] = None
+        self._on_state_changed: Optional[Callable] = None
         self._last_song_id: str = ""
-        self._observer = None
+        self._last_playing: bool = False
+        self._polling = False
+        self._lock = threading.Lock()
 
     def set_on_song_changed(self, callback: Callable):
         self._on_song_changed = callback
 
+    def set_on_art_ready(self, callback: Callable):
+        self._on_art_ready = callback
+
+    def set_on_state_changed(self, callback: Callable):
+        self._on_state_changed = callback
+
     def start(self):
-        """Start monitoring Apple Music."""
-        self._get_music_app()
-        self._observe_distributed_notifications()
-        self._start_polling()
+        pass
 
     def stop(self):
-        """Stop monitoring."""
-        if self._timer:
-            self._timer.invalidate()
-            self._timer = None
-        if self._observer:
-            NSDistributedNotificationCenter.defaultCenter().removeObserver_(self._observer)
+        self._polling = False
 
-    def _get_music_app(self):
-        """Get ScriptingBridge reference to Music.app."""
+    def poll(self):
+        """Kick off a background poll if one isn't already running."""
+        if self._polling:
+            return
+        self._polling = True
+        threading.Thread(target=self._do_poll, daemon=True).start()
+
+    def _do_poll(self):
         try:
-            self._music_app = SBApplication.applicationWithBundleIdentifier_("com.apple.Music")
+            result = subprocess.run(
+                ["osascript", "-e", _SCRIPT],
+                capture_output=True, text=True, timeout=3,
+            )
+            output = result.stdout.strip()
         except Exception:
-            self._music_app = None
+            output = ""
+        finally:
+            self._polling = False
 
-    def _observe_distributed_notifications(self):
-        """Listen for Apple Music player state changes."""
-        center = NSDistributedNotificationCenter.defaultCenter()
-
-        class Observer(NSObject):
-            def initWithMonitor_(self, monitor):
-                self = objc.super(Observer, self).init()
-                if self is None:
-                    return None
-                self._monitor = monitor
-                return self
-
-            def handlePlayerInfo_(self, notification):
-                self._monitor._on_notification(notification)
-
-        self._observer = Observer.alloc().initWithMonitor_(self)
-        center.addObserver_selector_name_object_(
-            self._observer,
-            "handlePlayerInfo:",
-            "com.apple.Music.playerInfo",
-            None,
-        )
-
-    def _on_notification(self, notification):
-        """Handle distributed notification from Music.app."""
-        info = notification.userInfo()
-        if info is None:
+        if not output:
             return
 
-        state = info.get("Player State", "")
-        if state == "Playing":
-            self.is_playing = True
-        elif state == "Paused":
-            self.is_playing = False
-        elif state == "Stopped":
-            self.is_playing = False
-            self.current_song = None
-            self._last_song_id = ""
+        parts = output.split("\n", 5)
+        if len(parts) < 6:
             return
 
-        # Check for song change
-        self._check_current_song()
+        state_str, pos_str, title, artist, album, dur_str = parts
 
-    def _start_polling(self):
-        """Start a timer that polls playback position."""
-        # Use a background thread with a simple loop
-        def poll_loop():
-            import time
-            while True:
-                try:
-                    self._update_state()
-                except Exception:
-                    pass
-                time.sleep(0.2)
+        with self._lock:
+            was_playing = self.is_playing
+            self.is_playing = (state_str == "playing")
+            try:
+                self.playback_time = float(pos_str)
+            except ValueError:
+                self.playback_time = 0.0
 
-        thread = threading.Thread(target=poll_loop, daemon=True)
-        thread.start()
+            state_cb = None
+            if was_playing != self.is_playing:
+                self._last_playing = self.is_playing
+                state_cb = self._on_state_changed
 
-    def _update_state(self):
-        """Update playback state and position."""
-        if self._music_app is None:
-            self._get_music_app()
-            if self._music_app is None:
-                return
-
-        try:
-            player_state = self._music_app.playerState()
-            # Music.app ScriptingBridge states:
-            # 1800426320 (0x6B505350) = playing
-            # 1800426352 (0x6B505370) = paused
-            # 1800426323 (0x6B505353) = stopped
-            # 0 = stopped (when app just launched)
-            if player_state == 1800426320:
-                self.is_playing = True
+            if title:
+                song_id = f"{title}|{artist}"
+                if song_id != self._last_song_id:
+                    self._last_song_id = song_id
+                    try:
+                        duration = float(dur_str)
+                    except ValueError:
+                        duration = 0.0
+                    self.current_song = SongInfo(
+                        title=title, artist=artist, album=album, duration=duration,
+                    )
+                    threading.Thread(target=self._fetch_album_art, daemon=True).start()
+                    cb = self._on_song_changed
+                else:
+                    cb = None
             else:
-                self.is_playing = False
+                if self.current_song is not None:
+                    self.current_song = None
+                    self._last_song_id = ""
+                cb = None
 
-            if self.is_playing:
-                self.playback_time = self._music_app.playerPosition()
-            self._check_current_song()
-        except Exception:
-            self._music_app = None
+        if cb:
+            cb(self.current_song)
 
-    def _check_current_song(self):
-        """Check if the current song has changed."""
-        if self._music_app is None:
-            return
+        if state_cb:
+            state_cb(self.is_playing)
 
+    def _fetch_album_art(self):
+        art_path = "/tmp/lyric_island_art.jpg"
         try:
-            track = self._music_app.currentTrack()
-            if track is None:
-                if self.current_song is not None:
-                    self.current_song = None
-                    self._last_song_id = ""
-                return
-
-            # name() returns None when nothing is actually playing
-            title = track.name()
-            if not title:
-                if self.current_song is not None:
-                    self.current_song = None
-                    self._last_song_id = ""
-                return
-
-            artist = track.artist() or ""
-            album = track.album() or ""
-            duration = track.duration() or 0
-            persistent_id = track.persistentID() or ""
-
-            song_id = f"{title}|{artist}"
-
-            if song_id != self._last_song_id:
-                self._last_song_id = song_id
-                self.current_song = SongInfo(
-                    title=title,
-                    artist=artist,
-                    album=album,
-                    duration=duration,
-                    id=str(persistent_id),
-                )
-                if self._on_song_changed:
-                    self._on_song_changed(self.current_song)
+            os.remove(art_path)
+        except OSError:
+            pass
+        script = (
+            'tell application "Music"\n'
+            '    if player state is playing or player state is paused then\n'
+            '        tell artwork 1 of current track\n'
+            '            set d to raw data\n'
+            '        end tell\n'
+            '        set f to POSIX file "' + art_path + '"\n'
+            '        set fp to open for access f with write permission\n'
+            '        write d to fp\n'
+            '        close access fp\n'
+            '        return "ok"\n'
+            '    end if\n'
+            '    return "no"\n'
+            'end tell'
+        )
+        try:
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=5,
+            )
+            if os.path.exists(art_path) and os.path.getsize(art_path) > 0:
+                with self._lock:
+                    if self.current_song:
+                        self.current_song.art_path = art_path
+                if self._on_art_ready:
+                    self._on_art_ready(art_path)
         except Exception:
             pass
 
     def toggle_play_pause(self):
-        """Toggle play/pause."""
-        if self._music_app:
-            try:
-                self._music_app.playpause()
-            except Exception:
-                pass
+        threading.Thread(
+            target=lambda: subprocess.run(
+                ["osascript", "-e", 'tell application "Music" to playpause'],
+                capture_output=True, timeout=3,
+            ),
+            daemon=True,
+        ).start()
 
     def next_track(self):
-        """Skip to next track."""
-        if self._music_app:
-            try:
-                self._music_app.nextTrack()
-            except Exception:
-                pass
+        threading.Thread(
+            target=lambda: subprocess.run(
+                ["osascript", "-e", 'tell application "Music" to next track'],
+                capture_output=True, timeout=3,
+            ),
+            daemon=True,
+        ).start()
 
     def previous_track(self):
-        """Skip to previous track."""
-        if self._music_app:
-            try:
-                self._music_app.previousTrack()
-            except Exception:
-                pass
+        threading.Thread(
+            target=lambda: subprocess.run(
+                ["osascript", "-e", 'tell application "Music" to previous track'],
+                capture_output=True, timeout=3,
+            ),
+            daemon=True,
+        ).start()

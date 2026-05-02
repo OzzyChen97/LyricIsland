@@ -33,3 +33,4 @@ ENV/
 *.log
 *.tmp
 .env
+CLAUDE.md

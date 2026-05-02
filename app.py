@@ -1,59 +1,114 @@
 """LyricIsland - Floating lyrics for Apple Music on macOS."""
 
-import sys
-import time
-import threading
+import objc
 
 from AppKit import (
-    NSApp,
     NSApplication,
-    NSApplicationActivationPolicyAccessory,
+    NSApplicationActivationPolicyProhibited,
+    NSColor,
+    NSFont,
     NSImage,
+    NSMakePoint,
     NSMenu,
     NSMenuItem,
+    NSSize,
     NSStatusBar,
     NSVariableStatusItemLength,
 )
-from Foundation import (
-    NSDate,
-    NSObject,
-    NSRunLoop,
-    NSTimer,
-)
+from Foundation import NSObject, NSTimer
 
-from config import APP_NAME, POLL_INTERVAL
-from music_monitor import MusicMonitor, SongInfo
-from lyrics_fetcher import fetch_lyrics_async, LyricLine
+from config import POLL_INTERVAL, COMPACT_WIDTH, COMPACT_HEIGHT
+from music_monitor import MusicMonitor
+from lyrics_fetcher import fetch_lyrics_async
 from sync_engine import SyncEngine
-from floating_window import FloatingWindow, LyricsContentView
+from floating_window import FloatingWindow, LyricsContentView, _ns, _attrs
+
+_pending = []
 
 
-class AppDelegate(NSObject):
-    """Main application delegate - handles menu actions."""
-
-    def init(self):
-        self = objc.super(AppDelegate, self).init()
+class _Dispatcher(NSObject):
+    def initWithCallback_(self, cb):
+        self = objc.super(_Dispatcher, self).init()
         if self is None:
             return None
-        self._controller = None
+        self._cb = cb
         return self
 
-    def setController_(self, controller):
-        self._controller = controller
+    def invoke_(self, _=None):
+        if self in _pending:
+            _pending.remove(self)
+        if self._cb:
+            self._cb()
+            self._cb = None
 
-    def togglePanel_(self, sender):
-        if self._controller:
-            self._controller.toggle_panel()
 
-    def quit_(self, sender):
-        if self._controller:
-            self._controller.stop()
-        NSApp.terminate_(None)
+def _on_main(fn, *args):
+    def call():
+        fn(*args)
+    d = _Dispatcher.alloc().initWithCallback_(call)
+    _pending.append(d)
+    d.performSelectorOnMainThread_withObject_waitUntilDone_("invoke:", None, False)
+
+
+class _PollTarget(NSObject):
+    def initWithCtl_(self, ctl):
+        self = objc.super(_PollTarget, self).init()
+        if self is None:
+            return None
+        self._ctl = ctl
+        return self
+
+    def tick_(self, timer):
+        try:
+            self._ctl.music_monitor.poll()
+        except Exception:
+            pass
+
+
+class _SyncTarget(NSObject):
+    def initWithCtl_(self, ctl):
+        self = objc.super(_SyncTarget, self).init()
+        if self is None:
+            return None
+        self._ctl = ctl
+        return self
+
+    def tick_(self, timer):
+        try:
+            mm = self._ctl.music_monitor
+            if mm.is_playing:
+                self._ctl.sync_engine.update(mm.playback_time)
+                idx, text = self._ctl.sync_engine.get_current()
+                self._ctl.content_view.set_current_line(text, idx)
+                lines = self._ctl.sync_engine.lines
+                if 0 <= idx < len(lines) - 1:
+                    self._ctl.content_view.set_next_line(lines[idx + 1].text)
+                else:
+                    self._ctl.content_view.set_next_line("")
+                self._ctl.content_view.set_playing(True)
+        except Exception:
+            pass
+
+
+class _AnimTarget(NSObject):
+    def initWithCtl_(self, ctl):
+        self = objc.super(_AnimTarget, self).init()
+        if self is None:
+            return None
+        self._ctl = ctl
+        return self
+
+    def tick_(self, timer):
+        try:
+            cv = self._ctl.content_view
+            mm = self._ctl.music_monitor
+            if cv:
+                cv.set_needs_animation(mm.is_playing)
+        except Exception:
+            pass
 
 
 class LyricIslandController:
-    """Main controller that wires everything together."""
-
     def __init__(self):
         self.music_monitor = MusicMonitor()
         self.sync_engine = SyncEngine()
@@ -64,191 +119,119 @@ class LyricIslandController:
         self.status_item = None
 
     def start(self):
-        """Initialize and start the app."""
         self._create_status_item()
         self._create_floating_window()
-
-        # Wire callbacks
         self.music_monitor.set_on_song_changed(self._on_song_changed)
-
-        # Start monitoring
+        self.music_monitor.set_on_art_ready(self._on_art_ready)
+        self.music_monitor.set_on_state_changed(self._on_state_changed)
         self.music_monitor.start()
-
-        # Start sync timer
+        self._start_poll_timer()
         self._start_sync_timer()
-
-        # Start animation timer (for bars)
         self._start_animation_timer()
 
     def stop(self):
-        """Stop the app."""
         self.music_monitor.stop()
 
     def _create_status_item(self):
-        """Create menu bar status item."""
         status_bar = NSStatusBar.systemStatusBar()
         self.status_item = status_bar.statusItemWithLength_(NSVariableStatusItemLength)
+        font = NSFont.systemFontOfSize_(16)
+        size = NSSize(20, 20)
+        image = NSImage.alloc().initWithSize_(size)
+        image.lockFocus()
+        color = NSColor.whiteColor()
+        t = _ns("\u266a")
+        a = _attrs(font, color)
+        ts = t.sizeWithAttributes_(a)
+        t.drawAtPoint_withAttributes_(
+            NSMakePoint((size.width - ts.width) / 2, (size.height - ts.height) / 2),
+            a,
+        )
+        image.unlockFocus()
+        image.setSize_((18, 18))
+        self.status_item.button().setImage_(image)
 
-        # Set icon
-        image = NSImage.imageNamed_("NSApplicationIcon")
-        if image:
-            image.setSize_((18, 18))
-            self.status_item.button().setImage_(image)
-
-        # Create menu
         menu = NSMenu.alloc().init()
-
-        show_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Show / Hide Lyrics", "togglePanel:", "l"
+        quit = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Quit LyricIsland", "terminate:", "q"
         )
-        show_item.setKeyEquivalentModifierMask_(1 << 3)  # Cmd
-        menu.addItem_(show_item)
-
-        menu.addItem_(NSMenuItem.separatorItem())
-
-        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Quit LyricIsland", "quit:", "q"
-        )
-        quit_item.setKeyEquivalentModifierMask_(1 << 3)  # Cmd
-        menu.addItem_(quit_item)
-
+        menu.addItem_(quit)
         self.status_item.setMenu_(menu)
 
     def _create_floating_window(self):
-        """Create the floating lyrics window."""
-        content_view = LyricsContentView.alloc().initWithFrame_(
-            ((0, 0), (400, 48))
-        )
-
-        content_view.set_callbacks(
-            on_tap=self._on_panel_tap,
-            on_expand=self._on_expand,
-            on_collapse=self._on_collapse,
-        )
-
-        self.window = FloatingWindow.alloc().initWithContent_(content_view)
-        self.content_view = content_view
+        cv = LyricsContentView.alloc().initWithFrame_(((0, 0), (COMPACT_WIDTH, COMPACT_HEIGHT)))
+        cv.set_callbacks(on_toggle_expand=self._on_toggle_expand)
+        self.window = FloatingWindow.alloc().initWithContent_(cv)
+        self.content_view = cv
         self.window.orderFront_(None)
 
-    def _start_sync_timer(self):
-        """Timer that updates sync engine and redraws UI."""
-        def tick():
-            while True:
-                try:
-                    self._update_sync()
-                except Exception:
-                    pass
-                time.sleep(POLL_INTERVAL)
+    def _start_poll_timer(self):
+        t = _PollTarget.alloc().initWithCtl_(self)
+        NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            0.5, t, "tick:", None, True
+        )
+        self._poll_target = t
 
-        thread = threading.Thread(target=tick, daemon=True)
-        thread.start()
+    def _start_sync_timer(self):
+        t = _SyncTarget.alloc().initWithCtl_(self)
+        NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            POLL_INTERVAL, t, "tick:", None, True
+        )
+        self._sync_target = t
 
     def _start_animation_timer(self):
-        """Timer for animating playback bars."""
-        def tick():
-            while True:
-                try:
-                    if self.music_monitor.is_playing and self.content_view:
-                        self.content_view.setNeedsDisplay_(True)
-                except Exception:
-                    pass
-                time.sleep(0.15)
+        t = _AnimTarget.alloc().initWithCtl_(self)
+        NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            0.05, t, "tick:", None, True
+        )
+        self._anim_target = t
 
-        thread = threading.Thread(target=tick, daemon=True)
-        thread.start()
+    def _on_song_changed(self, song):
+        _on_main(self._update_ui_for_song, song)
 
-    def _update_sync(self):
-        """Update sync engine with current playback position."""
-        if self.music_monitor.is_playing:
-            self.sync_engine.update(self.music_monitor.playback_time)
-            idx = self.sync_engine.current_index
-            if 0 <= idx < len(self.sync_engine.lines):
-                text = self.sync_engine.lines[idx].text
-                self._call_on_main(self.content_view.set_current_line, text, idx)
-            else:
-                self._call_on_main(self.content_view.set_current_line, "", -1)
+    def _on_art_ready(self, art_path):
+        _on_main(self._apply_album_art, art_path)
 
-    def _on_song_changed(self, song: SongInfo):
-        """Called when a new song starts playing."""
-        # Update UI
-        self._call_on_main(self.content_view.set_song, song.title, song.artist)
-        self._call_on_main(self.content_view.set_playing, True)
+    def _on_state_changed(self, is_playing):
+        _on_main(self._apply_play_state, is_playing)
 
-        # Fetch lyrics
+    def _update_ui_for_song(self, song):
+        self.content_view.set_song(song.title, song.artist)
+        self.content_view.set_playing(True)
+        self.content_view.set_album_art(song.art_path)
         fetch_lyrics_async(
-            song.title,
-            song.artist,
-            song.album,
-            song.duration,
-            callback=lambda lines: self._on_lyrics_fetched(lines),
+            song.title, song.artist, song.album, song.duration,
+            callback=self._on_lyrics_fetched,
         )
 
-    def _on_lyrics_fetched(self, lines: list[LyricLine]):
-        """Called when lyrics are fetched."""
+    def _on_lyrics_fetched(self, lines):
+        _on_main(self._apply_lyrics, lines)
+
+    def _apply_lyrics(self, lines):
         self.current_lines = lines
         self.sync_engine.set_lyrics(lines)
-        self._call_on_main(self.content_view.set_lyrics, lines)
+        self.content_view.set_lyrics(lines)
 
-    def _call_on_main(self, func, *args):
-        """Execute a function on the main thread."""
-        def do_call():
-            func(*args)
+    def _apply_album_art(self, art_path):
+        self.content_view.set_album_art(art_path)
 
-        NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            0, self, "_timerCallback:", do_call, False
-        )
+    def _apply_play_state(self, is_playing):
+        self.content_view.set_playing(is_playing)
 
-    def _timerCallback_(self, timer):
-        """NSTimer callback that runs a function."""
-        callback = timer.userInfo()
-        if callable(callback):
-            callback()
-
-    # -- Panel callbacks --
-
-    def toggle_panel(self):
+    def _on_toggle_expand(self):
         self.is_expanded = not self.is_expanded
         self.content_view.set_expanded(self.is_expanded)
         self.window.set_expanded(self.is_expanded)
 
-    def _on_panel_tap(self):
-        self.toggle_panel()
-
-    def _on_expand(self):
-        self.is_expanded = True
-        self.content_view.set_expanded(True)
-        self.window.set_expanded(True)
-
-    def _on_collapse(self):
-        self.is_expanded = False
-        self.content_view.set_expanded(False)
-        self.window.set_expanded(False)
-
-
-import objc
-
 
 def main():
     app = NSApplication.sharedApplication()
-    app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    app.setActivationPolicy_(NSApplicationActivationPolicyProhibited)
 
-    # Create delegate for menu actions
-    delegate = AppDelegate.alloc().init()
-    app.setDelegate_(delegate)
+    ctl = LyricIslandController()
+    ctl.start()
 
-    # Create and start controller
-    controller = LyricIslandController()
-    delegate.setController_(controller)
-    controller.start()
-
-    # Keep the app running
-    try:
-        while True:
-            NSRunLoop.currentRunLoop().runUntilDate_(
-                NSDate.dateWithTimeIntervalSinceNow_(0.1)
-            )
-    except KeyboardInterrupt:
-        controller.stop()
+    app.run()
 
 
 if __name__ == "__main__":
