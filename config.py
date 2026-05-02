@@ -1,7 +1,7 @@
 """Configuration constants for LyricIsland."""
 
 APP_NAME = "LyricIsland"
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 # Window dimensions
 COMPACT_WIDTH = 400
