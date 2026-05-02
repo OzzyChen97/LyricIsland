@@ -4,6 +4,7 @@ import objc
 
 from AppKit import (
     NSApplication,
+    NSApplicationActivationPolicyAccessory,
     NSApplicationActivationPolicyProhibited,
     NSColor,
     NSFont,
@@ -17,11 +18,13 @@ from AppKit import (
 )
 from Foundation import NSObject, NSTimer
 
-from config import POLL_INTERVAL, COMPACT_WIDTH, COMPACT_HEIGHT
+from config import settings
 from core.music_monitor import MusicMonitor
 from core.lyrics_fetcher import fetch_lyrics_async
 from core.sync_engine import SyncEngine
 from ui.floating_window import FloatingWindow, LyricsContentView, _ns, _attrs
+from ui.home_window import HomeWindowController
+from ui.touchbar import TouchBarLyricDelegate
 
 _pending = []
 
@@ -77,15 +80,21 @@ class _SyncTarget(NSObject):
         try:
             mm = self._ctl.music_monitor
             if mm.is_playing:
-                self._ctl.sync_engine.update(mm.playback_time)
+                delay_s = settings.lyric_delay_ms / 1000.0
+                adjusted_time = mm.get_playback_time() + delay_s
+                self._ctl.sync_engine.update(adjusted_time)
                 idx, text = self._ctl.sync_engine.get_current()
                 self._ctl.content_view.set_current_line(text, idx)
+                self._ctl.content_view.set_line_progress(self._ctl.sync_engine.line_progress)
                 lines = self._ctl.sync_engine.lines
                 if 0 <= idx < len(lines) - 1:
                     self._ctl.content_view.set_next_line(lines[idx + 1].text)
                 else:
                     self._ctl.content_view.set_next_line("")
                 self._ctl.content_view.set_playing(True)
+
+                if self._ctl._touchbar_delegate and settings.show_touchbar_lyrics:
+                    self._ctl._touchbar_delegate.setLyric_(text)
         except Exception:
             pass
 
@@ -108,19 +117,31 @@ class _AnimTarget(NSObject):
             pass
 
 
-class LyricIslandController:
-    def __init__(self):
+class LyricIslandController(NSObject):
+    window = None
+    content_view = None
+    status_item = None
+    _home_ctrl = None
+    _touchbar_delegate = None
+    music_monitor = None
+    sync_engine = None
+    current_lines = None
+    is_expanded = False
+
+    def init(self):
+        self = objc.super(LyricIslandController, self).init()
+        if self is None:
+            return None
         self.music_monitor = MusicMonitor()
         self.sync_engine = SyncEngine()
         self.current_lines = []
-        self.is_expanded = False
-        self.window = None
-        self.content_view = None
-        self.status_item = None
+        return self
 
     def start(self):
         self._create_status_item()
         self._create_floating_window()
+        self._create_home_window()
+        self._create_touchbar()
         self.music_monitor.set_on_song_changed(self._on_song_changed)
         self.music_monitor.set_on_art_ready(self._on_art_ready)
         self.music_monitor.set_on_state_changed(self._on_state_changed)
@@ -131,6 +152,8 @@ class LyricIslandController:
 
     def stop(self):
         self.music_monitor.stop()
+        if self._touchbar_delegate:
+            self._touchbar_delegate.deactivate()
 
     def _create_status_item(self):
         status_bar = NSStatusBar.systemStatusBar()
@@ -152,18 +175,68 @@ class LyricIslandController:
         self.status_item.button().setImage_(image)
 
         menu = NSMenu.alloc().init()
+
+        settings_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "\u2699 \u8bbe\u7f6e...", "showSettings:", "s"
+        )
+        settings_item.setTarget_(self)
+        menu.addItem_(settings_item)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+
         quit = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Quit LyricIsland", "terminate:", "q"
         )
         menu.addItem_(quit)
         self.status_item.setMenu_(menu)
 
+    def showSettings_(self, sender):
+        if self._home_ctrl:
+            self._home_ctrl.show_window()
+
     def _create_floating_window(self):
-        cv = LyricsContentView.alloc().initWithFrame_(((0, 0), (COMPACT_WIDTH, COMPACT_HEIGHT)))
+        cv = LyricsContentView.alloc().initWithFrame_(((0, 0), (settings.compact_width, settings.compact_height)))
         cv.set_callbacks(on_toggle_expand=self._on_toggle_expand)
         self.window = FloatingWindow.alloc().initWithContent_(cv)
         self.content_view = cv
         self.window.orderFront_(None)
+
+    def _create_home_window(self):
+        self._home_ctrl = HomeWindowController.alloc().init()
+        self._home_ctrl.set_callbacks(
+            on_size_changed=self._on_size_changed,
+            on_delay_changed=self._on_delay_changed,
+            on_color_changed=self._on_color_changed,
+            on_ktv_changed=self._on_ktv_changed,
+            on_touchbar_changed=self._on_touchbar_setting_changed,
+        )
+
+    def _create_touchbar(self):
+        self._touchbar_delegate = TouchBarLyricDelegate.alloc().init()
+        if settings.show_touchbar_lyrics:
+            self._touchbar_delegate.activate()
+
+    def _on_size_changed(self, w, h):
+        if self.content_view:
+            self.content_view.update_compact_size(w, h)
+
+    def _on_delay_changed(self, val):
+        pass
+
+    def _on_color_changed(self, key, hex_str):
+        if self.content_view:
+            self.content_view.setNeedsDisplay_(True)
+
+    def _on_ktv_changed(self, enabled):
+        if self.content_view:
+            self.content_view.setNeedsDisplay_(True)
+
+    def _on_touchbar_setting_changed(self, enabled):
+        if self._touchbar_delegate:
+            if enabled:
+                self._touchbar_delegate.activate()
+            else:
+                self._touchbar_delegate.deactivate()
 
     def _start_poll_timer(self):
         t = _PollTarget.alloc().initWithCtl_(self)
@@ -175,7 +248,7 @@ class LyricIslandController:
     def _start_sync_timer(self):
         t = _SyncTarget.alloc().initWithCtl_(self)
         NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            POLL_INTERVAL, t, "tick:", None, True
+            0.04, t, "tick:", None, True
         )
         self._sync_target = t
 
@@ -199,6 +272,8 @@ class LyricIslandController:
         self.content_view.set_song(song.title, song.artist)
         self.content_view.set_playing(True)
         self.content_view.set_album_art(song.art_path)
+        if self._touchbar_delegate:
+            self._touchbar_delegate.updateSongInfo_artist_(song.title, song.artist)
         fetch_lyrics_async(
             song.title, song.artist, song.album, song.duration,
             callback=self._on_lyrics_fetched,
@@ -226,9 +301,10 @@ class LyricIslandController:
 
 def main():
     app = NSApplication.sharedApplication()
-    app.setActivationPolicy_(NSApplicationActivationPolicyProhibited)
+    app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-    ctl = LyricIslandController()
+    ctl = LyricIslandController.alloc().init()
+    ctl.retain()
     ctl.start()
 
     app.run()

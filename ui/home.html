@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>LyricIsland 设置</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #141418;
+    --card: #1c1c21;
+    --text: #eaeaea;
+    --muted: #9e9e9e;
+    --accent: #ffd600;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 16px 0; }
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.05) inset;
+  }
+  .section-title { font-weight: 600; margin-bottom: 12px; color: #fff; }
+  .tip { background: rgba(255,235,59,0.08); border-radius: 8px; padding: 10px; margin-bottom: 12px; font-size: 12px; color: var(--muted); }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  input[type=range] { width: 100%; }
+  .preset-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .preset-btn {
+    border: none; background: rgba(255,255,255,0.06); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 12px;
+  }
+  .preset-btn.active { background: var(--accent); color: #111; }
+  .row { display: flex; gap: 12px; align-items: center; }
+  .row > * { flex: 1; }
+  .small { width: 60px; flex: none; text-align: right; font-size: 12px; color: var(--muted); }
+  input[type=color] { width: 36px; height: 28px; padding: 0; border: none; background: transparent; cursor: pointer; }
+  .switch-label { display: flex; align-items: center; gap: 10px; cursor: pointer; flex: 1; }
+  .switch-track {
+    position: relative; width: 40px; height: 22px; flex: none;
+    background: rgba(255,255,255,0.15); border-radius: 22px;
+    transition: background .2s; cursor: pointer;
+  }
+  .switch-track::before {
+    content: ""; position: absolute; left: 2px; top: 2px; width: 18px; height: 18px;
+    background: #fff; border-radius: 50%; transition: transform .2s;
+  }
+  .switch-track.on { background: #4caf50; }
+  .switch-track.on::before { transform: translateX(18px); }
+  .hex { font-family: SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); width: 80px; }
+  .btn-reset {
+    display: inline-block; background: rgba(255,255,255,0.06); border: none; color: var(--muted);
+    border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 11px; margin-top: 8px;
+  }
+  .hint { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 6px; }
+</style>
+</head>
+<body>
+  <h1>LyricIsland 设置</h1>
+  <div class="tip">所有设置即时应用并自动保存。</div>
+
+  <div class="card">
+    <div class="section-title">浮窗尺寸</div>
+    <div class="preset-list" id="presetList"></div>
+    <div class="row">
+      <label style="flex:0 0 56px;">宽度</label>
+      <input type="range" id="wSlider" min="200" max="800" step="1" />
+      <div class="small" id="wVal"></div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <label style="flex:0 0 56px;">高度</label>
+      <input type="range" id="hSlider" min="40" max="120" step="1" />
+      <div class="small" id="hVal"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">歌词延迟</div>
+    <div class="tip">正值=歌词提前，负值=歌词延后。步长 50ms。</div>
+    <div class="row">
+      <button class="preset-btn" id="delayMinus">-50ms</button>
+      <input type="range" id="delaySlider" min="-500" max="500" step="50" />
+      <button class="preset-btn" id="delayPlus">+50ms</button>
+      <div class="small" id="delayVal"></div>
+    </div>
+    <button class="btn-reset" id="delayReset">重置延迟</button>
+  </div>
+
+  <div class="card">
+    <div class="section-title">歌词颜色 / KTV 模式</div>
+    <div class="row">
+      <label style="flex:0 0 80px;">基础颜色</label>
+      <input type="color" id="lyricColor" />
+      <div class="hex" id="lyricHex"></div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <label style="flex:0 0 80px;">KTV 高亮</label>
+      <input type="color" id="ktvColor" />
+      <div class="hex" id="ktvHex"></div>
+    </div>
+    <div class="row" style="margin-top:12px;">
+      <div class="switch-label" id="ktvToggleWrap">
+        <span style="flex:1;font-size:12px;color:var(--muted);">启用 KTV 歌词模式</span>
+        <div class="switch-track" id="ktvToggle"></div>
+      </div>
+    </div>
+    <div class="hint">歌词随播放进度渐变高亮，类似 KTV 效果</div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">Touch Bar 歌词</div>
+    <div class="row">
+      <div class="switch-label" id="touchbarToggleWrap">
+        <span style="flex:1;font-size:12px;color:var(--muted);">在 Touch Bar 显示歌词</span>
+        <div class="switch-track" id="touchbarToggle"></div>
+      </div>
+    </div>
+    <div class="hint">需要 macOS 10.12.2+ 且有 Touch Bar 硬件</div>
+  </div>
+
+<script>
+const presets = [
+  { label: '标准', w: 400, h: 68 },
+  { label: '宽大', w: 520, h: 80 },
+  { label: '超大', w: 640, h: 90 }
+];
+
+const state = {
+  compact_width: 400,
+  compact_height: 68,
+  lyric_delay_ms: 0,
+  lyric_color: '#FFFFFF',
+  ktv_color: '#5B8CFF',
+  ktv_mode: false,
+  show_touchbar_lyrics: true
+};
+
+if (window.__INIT__) {
+  Object.assign(state, window.__INIT__);
+}
+
+function send(action, payload) {
+  try {
+    window.webkit.messageHandlers.bridge.postMessage({ action: action, payload: payload });
+  } catch(e) {}
+}
+
+function render() {
+  var presetList = document.getElementById('presetList');
+  presetList.innerHTML = '';
+  presets.forEach(function(p) {
+    var btn = document.createElement('button');
+    btn.className = 'preset-btn' + (p.w === state.compact_width && p.h === state.compact_height ? ' active' : '');
+    btn.textContent = p.label + ' ' + p.w + '\u00d7' + p.h;
+    btn.onclick = function() {
+      state.compact_width = p.w;
+      state.compact_height = p.h;
+      send('set_compact_size', { w: p.w, h: p.h });
+      render();
+    };
+    presetList.appendChild(btn);
+  });
+
+  document.getElementById('wSlider').value = state.compact_width;
+  document.getElementById('hSlider').value = state.compact_height;
+  document.getElementById('wVal').textContent = state.compact_width + 'px';
+  document.getElementById('hVal').textContent = state.compact_height + 'px';
+
+  document.getElementById('delaySlider').value = state.lyric_delay_ms;
+  document.getElementById('delayVal').textContent = (state.lyric_delay_ms > 0 ? '+' : '') + state.lyric_delay_ms + 'ms';
+
+  document.getElementById('lyricColor').value = state.lyric_color;
+  document.getElementById('ktvColor').value = state.ktv_color;
+  document.getElementById('lyricHex').textContent = state.lyric_color;
+  document.getElementById('ktvHex').textContent = state.ktv_color;
+
+  var ktvTrack = document.getElementById('ktvToggle');
+  if (state.ktv_mode) { ktvTrack.classList.add('on'); } else { ktvTrack.classList.remove('on'); }
+  var tbTrack = document.getElementById('touchbarToggle');
+  if (state.show_touchbar_lyrics) { tbTrack.classList.add('on'); } else { tbTrack.classList.remove('on'); }
+}
+
+function init() {
+  render();
+
+  document.getElementById('wSlider').addEventListener('input', function() {
+    state.compact_width = Number(this.value);
+    document.getElementById('wVal').textContent = state.compact_width + 'px';
+    send('set_compact_size', { w: state.compact_width, h: state.compact_height });
+  });
+
+  document.getElementById('hSlider').addEventListener('input', function() {
+    state.compact_height = Number(this.value);
+    document.getElementById('hVal').textContent = state.compact_height + 'px';
+    send('set_compact_size', { w: state.compact_width, h: state.compact_height });
+  });
+
+  document.getElementById('delaySlider').addEventListener('input', function() {
+    state.lyric_delay_ms = Number(this.value);
+    document.getElementById('delayVal').textContent = (state.lyric_delay_ms > 0 ? '+' : '') + state.lyric_delay_ms + 'ms';
+    send('set_lyric_delay_ms', { value: state.lyric_delay_ms });
+  });
+
+  document.getElementById('delayMinus').onclick = function() {
+    state.lyric_delay_ms = Math.max(-500, state.lyric_delay_ms - 50);
+    send('set_lyric_delay_ms', { value: state.lyric_delay_ms });
+    render();
+  };
+  document.getElementById('delayPlus').onclick = function() {
+    state.lyric_delay_ms = Math.min(500, state.lyric_delay_ms + 50);
+    send('set_lyric_delay_ms', { value: state.lyric_delay_ms });
+    render();
+  };
+  document.getElementById('delayReset').onclick = function() {
+    state.lyric_delay_ms = 0;
+    send('set_lyric_delay_ms', { value: 0 });
+    render();
+  };
+
+  document.getElementById('lyricColor').addEventListener('input', function() {
+    state.lyric_color = this.value.toUpperCase();
+    send('set_lyric_color', { hex: state.lyric_color });
+    render();
+  });
+  document.getElementById('ktvColor').addEventListener('input', function() {
+    state.ktv_color = this.value.toUpperCase();
+    send('set_ktv_color', { hex: state.ktv_color });
+    render();
+  });
+
+  document.getElementById('ktvToggleWrap').addEventListener('click', function() {
+    state.ktv_mode = !state.ktv_mode;
+    send('set_ktv_mode', { value: state.ktv_mode });
+    render();
+  });
+  document.getElementById('touchbarToggleWrap').addEventListener('click', function() {
+    state.show_touchbar_lyrics = !state.show_touchbar_lyrics;
+    send('set_show_touchbar_lyrics', { value: state.show_touchbar_lyrics });
+    render();
+  });
+}
+
+init();
+</script>
+</body>
+</html>

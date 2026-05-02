@@ -5,7 +5,7 @@ import queue
 import time
 import tkinter as tk
 
-from config import APP_NAME, POLL_INTERVAL, COMPACT_WIDTH, COMPACT_HEIGHT, EXPANDED_WIDTH, EXPANDED_HEIGHT
+from config import APP_NAME, POLL_INTERVAL, DEFAULT_COMPACT_WIDTH, DEFAULT_COMPACT_HEIGHT, EXPANDED_WIDTH, EXPANDED_HEIGHT
 from core.music_monitor import MusicMonitor, SongInfo
 from core.lyrics_fetcher import fetch_lyrics_async, LyricLine
 from core.sync_engine import SyncEngine
@@ -33,9 +33,9 @@ class LyricsWindow:
         self.root.configure(bg="#1a1a1a")
 
         screen_w = self.root.winfo_screenwidth()
-        x = (screen_w - COMPACT_WIDTH) // 2
+        x = (screen_w - DEFAULT_COMPACT_WIDTH) // 2
         y = 40
-        self.root.geometry(f"{COMPACT_WIDTH}x{COMPACT_HEIGHT}+{x}+{y}")
+        self.root.geometry(f"{DEFAULT_COMPACT_WIDTH}x{DEFAULT_COMPACT_HEIGHT}+{x}+{y}")
 
         # Compact frame
         self.compact_frame = tk.Frame(self.root, bg="#1a1a1a", highlightthickness=0)
@@ -62,7 +62,7 @@ class LyricsWindow:
         self.bars_canvas = tk.Canvas(
             self.compact_frame, width=12, height=16, bg="#1a1a1a", highlightthickness=0,
         )
-        self.bars_canvas.place(x=COMPACT_WIDTH - 40, y=16)
+        self.bars_canvas.place(x=DEFAULT_COMPACT_WIDTH - 40, y=16)
 
         self.compact_frame.bind("<Button-1>", lambda e: self.toggle_expand())
         self.title_label.bind("<Button-1>", lambda e: self.toggle_expand())
@@ -142,8 +142,8 @@ class LyricsWindow:
     def collapse(self):
         self.is_expanded = False
         screen_w = self.root.winfo_screenwidth()
-        x = (screen_w - COMPACT_WIDTH) // 2
-        self.root.geometry(f"{COMPACT_WIDTH}x{COMPACT_HEIGHT}+{x}+40")
+        x = (screen_w - DEFAULT_COMPACT_WIDTH) // 2
+        self.root.geometry(f"{DEFAULT_COMPACT_WIDTH}x{DEFAULT_COMPACT_HEIGHT}+{x}+40")
         self.expanded_frame.pack_forget()
         self.compact_frame.pack(fill=tk.BOTH, expand=True)
 

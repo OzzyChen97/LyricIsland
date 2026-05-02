@@ -3,6 +3,7 @@
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -55,6 +56,9 @@ class MusicMonitor:
         self._last_playing: bool = False
         self._polling = False
         self._lock = threading.Lock()
+        self._raw_playback_time: float = 0.0
+        self._time_at_poll: float = 0.0
+        self._interpolate = True
 
     def set_on_song_changed(self, callback: Callable):
         self._on_song_changed = callback
@@ -64,6 +68,12 @@ class MusicMonitor:
 
     def set_on_state_changed(self, callback: Callable):
         self._on_state_changed = callback
+
+    def get_playback_time(self) -> float:
+        if self._interpolate and self.is_playing and self._time_at_poll > 0:
+            elapsed = time.monotonic() - self._time_at_poll
+            return self._raw_playback_time + elapsed
+        return self.playback_time
 
     def start(self):
         pass
@@ -104,6 +114,8 @@ class MusicMonitor:
             self.is_playing = (state_str == "playing")
             try:
                 self.playback_time = float(pos_str)
+                self._raw_playback_time = self.playback_time
+                self._time_at_poll = time.monotonic()
             except ValueError:
                 self.playback_time = 0.0
 

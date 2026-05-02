@@ -39,12 +39,13 @@ from Foundation import (
 )
 
 from config import (
-    COMPACT_WIDTH,
-    COMPACT_HEIGHT,
+    DEFAULT_COMPACT_WIDTH,
+    DEFAULT_COMPACT_HEIGHT,
     EXPANDED_WIDTH,
     EXPANDED_HEIGHT,
     CORNER_RADIUS,
     EXPANDED_CORNER_RADIUS,
+    settings,
 )
 
 _HEADER_H = 80
@@ -73,16 +74,28 @@ def _primary_screen():
     return screens[0]
 
 
+def _hex_to_nscolor(hex_str, alpha=1.0):
+    hex_str = hex_str.lstrip("#")
+    if len(hex_str) == 6:
+        r = int(hex_str[0:2], 16) / 255.0
+        g = int(hex_str[2:4], 16) / 255.0
+        b = int(hex_str[4:6], 16) / 255.0
+        return NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, alpha)
+    return NSColor.colorWithWhite_alpha_(1.0, alpha)
+
+
 class FloatingWindow(NSWindow):
 
     def initWithContent_(self, content_view):
         screen = _primary_screen()
         vf = screen.visibleFrame()
+        cw = settings.compact_width
+        ch = settings.compact_height
         frame = NSMakeRect(
-            vf.origin.x + (vf.size.width - COMPACT_WIDTH) / 2,
-            vf.origin.y + vf.size.height - COMPACT_HEIGHT - 8,
-            COMPACT_WIDTH,
-            COMPACT_HEIGHT,
+            vf.origin.x + (vf.size.width - cw) / 2,
+            vf.origin.y + vf.size.height - ch - 8,
+            cw,
+            ch,
         )
 
         self = objc.super(FloatingWindow, self).initWithContentRect_styleMask_backing_defer_(
@@ -127,11 +140,24 @@ class FloatingWindow(NSWindow):
             self._is_expanded = expanded
             self._animate_resize()
 
+    def set_needs_compact_resize(self, w, h):
+        if self._is_expanded:
+            return
+        cur_frame = self.frame()
+        screen = _primary_screen()
+        vf = screen.visibleFrame()
+        x = cur_frame.origin.x + (cur_frame.size.width - w) / 2
+        y = cur_frame.origin.y + cur_frame.size.height - h
+        if y < vf.origin.y:
+            y = vf.origin.y
+        target = NSMakeRect(x, y, w, h)
+        self.setFrame_display_(target, True)
+
     def _animate_resize(self):
         if self._is_expanded:
             w, h = EXPANDED_WIDTH, EXPANDED_HEIGHT
         else:
-            w, h = COMPACT_WIDTH, COMPACT_HEIGHT
+            w, h = settings.compact_width, settings.compact_height
 
         cur_frame = self.frame()
         x = cur_frame.origin.x + (cur_frame.size.width - w) / 2
@@ -177,6 +203,7 @@ class LyricsContentView(NSView):
         self._scroll_offset = 0.0
 
         self._hover_arrow = False
+        self._line_progress = 0.0
         self._setup_tracking()
 
         return self
@@ -280,6 +307,20 @@ class LyricsContentView(NSView):
                 pass
         self._album_art = None
         self.setNeedsDisplay_(True)
+
+    def set_line_progress(self, progress):
+        self._line_progress = max(0.0, min(1.0, progress))
+        if settings.ktv_mode:
+            self.setNeedsDisplay_(True)
+
+    def update_compact_size(self, w, h):
+        if self._is_expanded:
+            return
+        self.setFrame_(((0, 0), (w, h)))
+        self.setNeedsDisplay_(True)
+        if self.window():
+            self.window().set_needs_compact_resize(w, h)
+
 
     def set_callbacks(self, on_toggle_expand=None, **kwargs):
         self._on_toggle_expand = on_toggle_expand
@@ -468,7 +509,18 @@ class LyricsContentView(NSView):
         text_x = 8 + vinyl_size + 10
         text_w = w - text_x - _ARROW_SIZE - 16
 
-        a = _attrs(NSFont.systemFontOfSize_weight_(12, 600), NSColor.whiteColor())
+        ref_h = DEFAULT_COMPACT_HEIGHT
+        scale = h / ref_h
+        title_size = max(10, 13 * scale)
+        lyric_size = max(10, 14 * scale)
+        sub_size = max(9, 11 * scale)
+        hint_size = max(9, 12 * scale)
+
+        title_y = h - max(20, 22 * scale)
+        lyric_y = max(22, 26 * scale)
+        sub_y = max(8, 10 * scale)
+
+        a = _attrs(NSFont.systemFontOfSize_weight_(title_size, 600), NSColor.whiteColor())
         title_text = self._song_title
         title = _ns(title_text)
         if title.sizeWithAttributes_(a).width > text_w:
@@ -478,37 +530,45 @@ class LyricsContentView(NSView):
             title_text = title_text[:-2] + "..."
             title = _ns(title_text)
         ts = title.sizeWithAttributes_(a)
-        title.drawAtPoint_withAttributes_(NSMakePoint(text_x, h - ts.height - 8), a)
+        title.drawAtPoint_withAttributes_(NSMakePoint(text_x, title_y), a)
 
         if self._current_line_text:
-            a = _attrs(NSFont.systemFontOfSize_(12), NSColor.colorWithWhite_alpha_(1.0, 0.9))
             txt = self._current_line_text
             lyric = _ns(txt)
-            ls = lyric.sizeWithAttributes_(a)
+            font_obj = NSFont.systemFontOfSize_(lyric_size)
+            ls = lyric.sizeWithAttributes_(_attrs(font_obj, NSColor.whiteColor()))
             max_w = text_w
             if ls.width > max_w:
-                while lyric.sizeWithAttributes_(a).width > max_w and len(txt) > 3:
+                while lyric.sizeWithAttributes_(_attrs(font_obj, NSColor.whiteColor())).width > max_w and len(txt) > 3:
                     txt = txt[:-1]
                 txt = txt[:-2] + "..."
                 lyric = _ns(txt)
-            lyric.drawAtPoint_withAttributes_(NSMakePoint(text_x, 26), a)
+            if settings.ktv_mode and self._line_progress > 0:
+                self._draw_ktv_line(lyric, font_obj, lyric_y, text_x, text_w,
+                                    self._line_progress, settings.lyric_color, settings.ktv_color)
+            elif settings.ktv_mode:
+                a = _attrs(font_obj, _hex_to_nscolor(settings.ktv_color, 0.95))
+                lyric.drawAtPoint_withAttributes_(NSMakePoint(text_x, lyric_y), a)
+            else:
+                a = _attrs(font_obj, _hex_to_nscolor(settings.lyric_color, 0.9))
+                lyric.drawAtPoint_withAttributes_(NSMakePoint(text_x, lyric_y), a)
 
             next_text = self._get_next_line_text()
             if next_text:
-                a2 = _attrs(NSFont.systemFontOfSize_(10), NSColor.colorWithWhite_alpha_(1.0, 0.4))
+                a2 = _attrs(NSFont.systemFontOfSize_(sub_size), NSColor.colorWithWhite_alpha_(1.0, 0.4))
                 nt = next_text
                 ntn = _ns(nt)
                 if ntn.sizeWithAttributes_(a2).width > max_w:
                     while ntn.sizeWithAttributes_(a2).width > max_w and len(nt) > 3:
                         nt = nt[:-1]
                     nt = nt[:-2] + "..."
-                _ns(nt).drawAtPoint_withAttributes_(NSMakePoint(text_x, 10), a2)
+                _ns(nt).drawAtPoint_withAttributes_(NSMakePoint(text_x, sub_y), a2)
         elif self._is_playing:
-            a = _attrs(NSFont.systemFontOfSize_(11), NSColor.colorWithWhite_alpha_(1.0, 0.4))
-            _ns("Music playing...").drawAtPoint_withAttributes_(NSMakePoint(text_x, 26), a)
+            a = _attrs(NSFont.systemFontOfSize_(hint_size), NSColor.colorWithWhite_alpha_(1.0, 0.4))
+            _ns("Music playing...").drawAtPoint_withAttributes_(NSMakePoint(text_x, lyric_y), a)
         else:
-            a = _attrs(NSFont.systemFontOfSize_(11), NSColor.colorWithWhite_alpha_(1.0, 0.35))
-            _ns("Waiting for music...").drawAtPoint_withAttributes_(NSMakePoint(text_x, 26), a)
+            a = _attrs(NSFont.systemFontOfSize_(hint_size), NSColor.colorWithWhite_alpha_(1.0, 0.35))
+            _ns("Waiting for music...").drawAtPoint_withAttributes_(NSMakePoint(text_x, lyric_y), a)
 
         if self._is_playing:
             self._draw_bars(w - _ARROW_SIZE - 20, h / 2 - 6, 12)
@@ -574,6 +634,10 @@ class LyricsContentView(NSView):
 
         line_y = clip_y - 16 + self._scroll_offset
         line_spacing = 32
+        ktv = settings.ktv_mode
+        lyric_base_color = settings.lyric_color
+        ktv_highlight_color = settings.ktv_color
+        progress = self._line_progress
 
         for i, line in enumerate(self._lines):
             if line_y > clip_y + 50:
@@ -588,26 +652,47 @@ class LyricsContentView(NSView):
 
             if is_active:
                 font = NSFont.systemFontOfSize_weight_(20, 700)
-                alpha = 1.0
             elif is_past:
                 font = NSFont.systemFontOfSize_(16)
-                alpha = 0.3
             else:
                 font = NSFont.systemFontOfSize_(16)
-                alpha = 0.55
 
-            a = _attrs(font, NSColor.colorWithWhite_alpha_(1.0, alpha))
             text = _ns(line.text)
-            text_size = text.sizeWithAttributes_(a)
+            text_size = text.sizeWithAttributes_(_attrs(font, NSColor.whiteColor()))
 
             if is_active:
-                NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.5, 1.0, 0.1).set()
-                NSBezierPath.fillRect_(NSMakeRect(8, line_y - 4, w - 16, text_size.height + 8))
+                if ktv:
+                    accent = _hex_to_nscolor(ktv_highlight_color, 0.15)
+                    accent.set()
+                    NSBezierPath.fillRect_(NSMakeRect(8, line_y - 4, w - 16, text_size.height + 8))
+                    accent_bar = _hex_to_nscolor(ktv_highlight_color, 0.8)
+                    accent_bar.set()
+                    NSBezierPath.fillRect_(NSMakeRect(4, line_y + 2, 3, text_size.height - 4))
+                else:
+                    NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.5, 1.0, 0.1).set()
+                    NSBezierPath.fillRect_(NSMakeRect(8, line_y - 4, w - 16, text_size.height + 8))
+                    NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.5, 1.0, 0.7).set()
+                    NSBezierPath.fillRect_(NSMakeRect(4, line_y + 2, 3, text_size.height - 4))
 
-                NSColor.colorWithCalibratedRed_green_blue_alpha_(0.3, 0.5, 1.0, 0.7).set()
-                NSBezierPath.fillRect_(NSMakeRect(4, line_y + 2, 3, text_size.height - 4))
-
-            text.drawAtPoint_withAttributes_(NSMakePoint(16, line_y), a)
+            if ktv and is_active and progress > 0:
+                self._draw_ktv_line(text, font, line_y, 16, None, progress,
+                                    lyric_base_color, ktv_highlight_color)
+            elif ktv:
+                if is_past:
+                    alpha = 0.45
+                    a = _attrs(font, _hex_to_nscolor(ktv_highlight_color, alpha))
+                else:
+                    a = _attrs(font, _hex_to_nscolor(lyric_base_color, 0.7))
+                text.drawAtPoint_withAttributes_(NSMakePoint(16, line_y), a)
+            else:
+                if is_active:
+                    alpha = 1.0
+                elif is_past:
+                    alpha = 0.3
+                else:
+                    alpha = 0.55
+                a = _attrs(font, NSColor.colorWithWhite_alpha_(1.0, alpha))
+                text.drawAtPoint_withAttributes_(NSMakePoint(16, line_y), a)
 
             line_y -= line_spacing
 
@@ -624,6 +709,35 @@ class LyricsContentView(NSView):
                 NSMakeRect(w - 6, bar_y, 3, bar_h), 1.5, 1.5
             )
             bar.fill()
+
+    def _draw_ktv_line(self, text, font, y, x, max_w, progress, base_hex, highlight_hex):
+        full_size = text.sizeWithAttributes_(_attrs(font, NSColor.whiteColor()))
+        full_w = full_size.width
+        if max_w is not None and full_w > max_w:
+            full_w = max_w
+        split_x = full_w * progress
+
+        NSGraphicsContext.saveGraphicsState()
+        clip = NSBezierPath.bezierPathWithRect_(NSMakeRect(x, y, split_x, full_size.height))
+        clip.addClip()
+        a_highlight = _attrs(font, _hex_to_nscolor(highlight_hex, 1.0))
+        text.drawAtPoint_withAttributes_(NSMakePoint(x, y), a_highlight)
+        NSGraphicsContext.restoreGraphicsState()
+
+        if split_x < full_w:
+            NSGraphicsContext.saveGraphicsState()
+            clip2 = NSBezierPath.bezierPathWithRect_(
+                NSMakeRect(x + split_x, y, full_w - split_x, full_size.height)
+            )
+            clip2.addClip()
+            a_base = _attrs(font, _hex_to_nscolor(base_hex, 0.7))
+            text.drawAtPoint_withAttributes_(NSMakePoint(x, y), a_base)
+            NSGraphicsContext.restoreGraphicsState()
+
+        NSGraphicsContext.saveGraphicsState()
+        NSColor.colorWithWhite_alpha_(1, 0.0).set()
+        NSBezierPath.fillRect_(NSMakeRect(0, 0, 0, 0))
+        NSGraphicsContext.restoreGraphicsState()
 
     def _draw_bars(self, x, y, height):
         t = time.time()
