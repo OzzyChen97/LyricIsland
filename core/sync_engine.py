@@ -2,7 +2,7 @@
 
 import threading
 
-from lyrics_fetcher import LyricLine
+from core.lyrics_fetcher import LyricLine
 
 
 class SyncEngine:

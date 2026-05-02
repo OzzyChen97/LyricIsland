@@ -19,17 +19,34 @@
 
 ## 目录
 
+- [目录](#目录)
 - [功能特性](#功能特性)
 - [演示](#演示)
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [系统要求](#系统要求)
 - [安装与运行](#安装与运行)
+  - [方式一：下载 DMG 安装包（推荐）](#方式一下载-dmg-安装包推荐)
+  - [方式二：源码运行](#方式二源码运行)
+    - [1. 克隆项目](#1-克隆项目)
+    - [2. 安装依赖](#2-安装依赖)
+    - [3. 运行应用](#3-运行应用)
+  - [首次授权提示](#首次授权提示)
 - [使用指南](#使用指南)
+  - [基本操作](#基本操作)
+  - [界面说明](#界面说明)
+  - [播放状态响应](#播放状态响应)
 - [配置说明](#配置说明)
 - [工作原理](#工作原理)
 - [常见问题](#常见问题)
+  - [Q: 歌词没有显示？](#q-歌词没有显示)
+  - [Q: 歌词不同步？](#q-歌词不同步)
+  - [Q: 窗口被其他窗口遮挡？](#q-窗口被其他窗口遮挡)
+  - [Q: Apple Music 未被检测到？](#q-apple-music-未被检测到)
+  - [Q: 无法拖拽窗口？](#q-无法拖拽窗口)
 - [贡献规范](#贡献规范)
+  - [开发流程](#开发流程)
+  - [提交规范](#提交规范)
 - [许可证](#许可证)
 - [致谢](#致谢)
 
@@ -97,14 +114,23 @@
 ## 项目结构
 
 ```
-LyricIsland-Python/
-├── app.py              # 应用入口，主控制器，菜单栏与窗口协调
-├── config.py           # 全局配置常量（窗口尺寸、颜色等）
-├── floating_window.py  # 浮动窗口与歌词自定义绘图视图（黑胶唱片、箭头按钮、拖拽）
-├── lyrics_fetcher.py   # 多源歌词获取（网易云 + LRCLIB）与 LRC 解析
-├── music_monitor.py    # Apple Music 播放状态监控（osascript 轮询）
-├── sync_engine.py      # 歌词同步引擎，二分查找匹配当前播放行
-└── run.sh              # 快捷启动脚本
+LyricIsland/
+├── app.py                    # 主入口（AppKit 原生 UI）
+├── app_tkinter.py            # 备选入口（tkinter UI）
+├── config.py                 # 全局配置常量
+├── core/                     # 核心业务逻辑
+│   ├── __init__.py
+│   ├── music_monitor.py      # Apple Music 播放状态监控
+│   ├── lyrics_fetcher.py     # 多源歌词获取与 LRC 解析
+│   └── sync_engine.py        # 歌词同步引擎
+├── ui/                       # UI 渲染模块
+│   ├── __init__.py
+│   └── floating_window.py    # 浮动窗口、黑胶唱片、歌词渲染
+├── scripts/
+│   └── run.sh                # 快捷启动脚本
+├── setup.py                  # py2app 打包配置
+├── requirements.txt          # Python 依赖清单
+└── README.md
 ```
 
 **模块职责：**
@@ -113,17 +139,17 @@ LyricIsland-Python/
 |------|-------------|------|
 | [app.py](app.py) | `LyricIslandController` | 应用生命周期、模块间协调、定时器管理、播放状态响应 |
 | [config.py](config.py) | 常量定义 | 统一管理窗口尺寸、颜色、API 配置 |
-| [floating_window.py](floating_window.py) | `FloatingWindow`, `LyricsContentView` | NSWindow 浮动窗口、黑胶唱片旋转、箭头按钮、自由拖拽、歌词渲染 |
-| [lyrics_fetcher.py](lyrics_fetcher.py) | `fetch_lyrics_async()`, `parse_lrc()` | 多源歌词获取（网易云优先 → LRCLIB 备选）、LRC 格式解析 |
-| [music_monitor.py](music_monitor.py) | `MusicMonitor`, `SongInfo` | osascript 轮询播放状态、曲目信息、封面提取、播放/暂停状态回调 |
-| [sync_engine.py](sync_engine.py) | `SyncEngine` | 二分查找定位当前歌词行、计算行内进度 |
+| [core/music_monitor.py](core/music_monitor.py) | `MusicMonitor`, `SongInfo` | osascript 轮询播放状态、曲目信息、封面提取、播放/暂停状态回调 |
+| [core/lyrics_fetcher.py](core/lyrics_fetcher.py) | `fetch_lyrics_async()`, `parse_lrc()` | 多源歌词获取（网易云优先 → LRCLIB 备选）、LRC 格式解析 |
+| [core/sync_engine.py](core/sync_engine.py) | `SyncEngine` | 二分查找定位当前歌词行、计算行内进度 |
+| [ui/floating_window.py](ui/floating_window.py) | `FloatingWindow`, `LyricsContentView` | NSWindow 浮动窗口、黑胶唱片旋转、箭头按钮、自由拖拽、歌词渲染 |
 
 ---
 
 ## 系统要求
 
 - **操作系统**: macOS 12 Monterey 或更高版本
-- **Python**: 3.10+
+- **Python**: 3.10+（源码运行时需要，.app 已内嵌 Python）
 - **音乐应用**: Apple Music（macOS 版）
 - **网络**: 首次获取歌词需要网络连接（歌词会缓存在内存中）
 
@@ -131,37 +157,38 @@ LyricIsland-Python/
 
 ## 安装与运行
 
-### 1. 克隆项目
+### 方式一：下载 DMG 安装包（推荐）
+
+1. 从 [Releases](https://github.com/OzzyChen97/LyricIsland/releases) 下载 `LyricIsland-v1.1.0-macOS.dmg`
+2. 双击打开 DMG，将 `LyricIsland.app` 拖入 `Applications` 文件夹
+3. 在启动台或应用程序文件夹中双击 `LyricIsland` 即可运行
+
+> 无需安装 Python 或任何依赖，开箱即用。
+
+### 方式二：源码运行
+
+#### 1. 克隆项目
 
 ```bash
-git clone https://github.com/your-username/LyricIsland-Python.git
-cd LyricIsland-Python
+git clone https://github.com/OzzyChen97/LyricIsland.git
+cd LyricIsland
 ```
 
-### 2. 安装依赖
+#### 2. 安装依赖
 
 ```bash
-pip3 install pyobjc-framework-Cocoa pyobjc-framework-ScriptingBridge pyobjc-framework-Quartz requests
+pip3 install -r requirements.txt
 ```
 
 > **注意**: PyObjC 仅在 macOS 上可用，安装过程可能需要几分钟。
 
-### 3. 运行应用
-
-**方式一：直接运行**
+#### 3. 运行应用
 
 ```bash
 python3 app.py
 ```
 
-**方式二：使用启动脚本**
-
-```bash
-chmod +x run.sh
-./run.sh
-```
-
-### 4. 授权提示
+### 首次授权提示
 
 首次运行时，macOS 可能会提示授予辅助功能权限，以允许应用监听 Apple Music 状态。请前往 **系统设置 → 隐私与安全性 → 辅助功能** 中授权。
 

@@ -14,10 +14,12 @@ OPTIONS = {
         'ScriptingBridge',
         'requests',
         'config',
-        'music_monitor',
-        'lyrics_fetcher',
-        'sync_engine',
-        'floating_window',
+        'core',
+        'core.music_monitor',
+        'core.lyrics_fetcher',
+        'core.sync_engine',
+        'ui',
+        'ui.floating_window',
     ],
     'excludes': [
         'tkinter',
@@ -33,10 +35,10 @@ OPTIONS = {
         'CFBundleVersion': '1.1.0',
         'CFBundleShortVersionString': '1.1.0',
         'LSMinimumSystemVersion': '12.0',
-        'LSUIElement': True,  # Hide from Dock
+        'LSUIElement': True,
         'NSHighResolutionCapable': True,
     },
-    'iconfile': None,  # Can add .icns file later
+    'iconfile': None,
 }
 
 setup(

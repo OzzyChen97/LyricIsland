@@ -18,10 +18,10 @@ from AppKit import (
 from Foundation import NSObject, NSTimer
 
 from config import POLL_INTERVAL, COMPACT_WIDTH, COMPACT_HEIGHT
-from music_monitor import MusicMonitor
-from lyrics_fetcher import fetch_lyrics_async
-from sync_engine import SyncEngine
-from floating_window import FloatingWindow, LyricsContentView, _ns, _attrs
+from core.music_monitor import MusicMonitor
+from core.lyrics_fetcher import fetch_lyrics_async
+from core.sync_engine import SyncEngine
+from ui.floating_window import FloatingWindow, LyricsContentView, _ns, _attrs
 
 _pending = []
 

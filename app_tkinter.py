@@ -6,9 +6,9 @@ import time
 import tkinter as tk
 
 from config import APP_NAME, POLL_INTERVAL, COMPACT_WIDTH, COMPACT_HEIGHT, EXPANDED_WIDTH, EXPANDED_HEIGHT
-from music_monitor import MusicMonitor, SongInfo
-from lyrics_fetcher import fetch_lyrics_async, LyricLine
-from sync_engine import SyncEngine
+from core.music_monitor import MusicMonitor, SongInfo
+from core.lyrics_fetcher import fetch_lyrics_async, LyricLine
+from core.sync_engine import SyncEngine
 
 
 class LyricsWindow:
